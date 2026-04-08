@@ -1,0 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Data & results (not tracked, but keep directory structure)
+inputs/*
+!inputs/.gitkeep
+!inputs/public_mabs_not_in_gdpa1.csv
+!inputs/embeddings/
+inputs/embeddings/*
+!inputs/embeddings/.gitkeep
+!inputs/antibody_features/
+inputs/antibody_features/*
+!inputs/antibody_features/.gitkeep
+outputs/*
+!outputs/.gitkeep
+results/*
+!results/.gitkeep
+logs/*
+!logs/.gitkeep
+wandb/
+lightning_logs/
+models/*
+!models/.gitkeep
+temp/
+output_dir/
+
+# Embeddings & caches
+*.pt
+*.pkl
+*.h5
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# WandB
+wandb/
+
+# External tools (add as submodules)
+external/
+exttools/
+
+# Internal handoff notes
+agent.md

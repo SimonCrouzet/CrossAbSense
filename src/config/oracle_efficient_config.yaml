@@ -1,0 +1,523 @@
+# CrossAbSense Default Configuration
+# This config drives all modeling choices and hyperparameters
+
+# =============================================================================
+# GENERAL SETTINGS
+# =============================================================================
+project_name: "CrossAbSense"
+experiment_name: "default_experiment"
+random_seed: 42
+device: "cuda"  # cuda, cpu, mps
+
+# Environment settings
+disable_tokenizers_parallelism: true  # Disable HuggingFace tokenizers parallelism (avoids fork warnings)
+
+# =============================================================================
+# DATA SETTINGS
+# =============================================================================
+data:
+  gdpa1_path: "inputs/GDPa1_complete.csv"
+  flab_path: "external/FLAb-main/data"
+  heldout_path: "inputs/GDPa1_v1.2_20250814_heldout.csv"
+
+  # Cross-validation settings (REQUIRED: use hierarchical_cluster_IgG_isotype_stratified_fold)
+  cv_fold_column: "hierarchical_cluster_IgG_isotype_stratified_fold"
+  n_folds: 5
+
+  # Sequence columns
+  heavy_chain_col: "vh_protein_sequence"
+  light_chain_col: "vl_protein_sequence"
+
+  # AHO-aligned sequences (alternative to original sequences)
+  # Set use_aho_aligned: true to use heavy_aligned_aho and light_aligned_aho columns
+  # IMPORTANT: Requires separate precomputed embeddings for aligned sequences!
+  use_aho_aligned: false
+
+  # Full-chain sequences (includes constant regions)
+  # Set use_full_chain: true to use hc_protein_sequence and lc_protein_sequence columns
+  # Benefits: Captures IgG subclass differences (e.g., IgG1 vs IgG2 CH2 domain affects Tm2)
+  # Mutually exclusive with use_aho_aligned
+  # IMPORTANT: Requires separate precomputed embeddings with _fullchain suffix!
+  use_full_chain: false
+
+  # Supported properties (assay names)
+  # Valid property names: AC-SINS_pH7.4, PR_CHO, HIC, Tm2, Titer
+  properties:
+    hydrophobicity:
+      assays: ["HIC"]
+      display_name: "💧 Hydrophobicity"
+    polyreactivity:
+      assays: ["PR_CHO"]
+      display_name: "🎯 Polyreactivity"
+    self_association:
+      assays: ["AC-SINS_pH7.4"]
+      display_name: "🧲 Self-association"
+    thermostability:
+      assays: ["Tm2"]
+      display_name: "🌡️ Thermostability"
+    titer:
+      assays: ["Titer"]
+      display_name: "🧪 Titer"
+
+  # Data augmentation with FLAb
+  use_flab_pretrain: true
+  flab_binding_datasets:
+    - "binding"  # 3.9M datapoints
+  flab_developability_datasets:
+    - "aggregation/jain2017biophyscial_HICRT.csv"
+    - "aggregation/jain2017biophysical_ACSINS.csv"
+    - "thermostability/jain2017biophysical_Tm.csv"
+    - "expression/jain2017biophysical_HEK.csv"
+    - "polyreactivity/jain2017biophysical_PSR.csv"
+
+# =============================================================================
+# ENCODER SETTINGS
+# =============================================================================
+# Two-stage training strategy:
+# 1. Default: Encoder frozen (freeze_encoder: true) - trains only decoder
+# 2. Fine-tuning: Set freeze_encoder: false to unfreeze encoder for full fine-tuning
+#
+# UNIFIED ENCODER INTERFACE:
+# - Specify which encoders to use via encoder_types list
+# - Single encoder:    encoder_types: ["esmc_6b"]
+# - Multiple encoders: encoder_types: ["esmc_6b", "antiberty", "prott5"]
+# - The system automatically handles fusion when using multiple encoders
+#
+# To unfreeze encoder for fine-tuning:
+#   - Set freeze_encoder: false
+encoder:
+  # Fusion strategy (only relevant when using multiple encoders)
+  fusion_strategy: "concat"  # Options: concat, weighted, attention, gated
+
+  # Encoders use native dimensions hard-coded in source files (zero information loss):
+  # - antiberty: 512 dims (native)
+  # - esm2_650M: 1280 dims (native)
+  # - esmc_300m: 960 dims (native)
+  # - esmc_600m: 1152 dims (native)
+  # - esmc_6b: 2560 dims (native)
+  # - prott5: 1024 dims (native)
+
+  # General encoder settings
+  freeze_encoder: true  # Freeze encoder by default (feature extraction mode)
+  use_heavy: true
+  use_light: true
+  pooling: null  # Options: mean, cls, max, sliced_wasserstein
+
+  # Per-encoder specific configs (optional, to override model names or other settings)
+  encoder_configs:
+    antiberty:
+      model_name: "alchemab/antiberty"
+      # Uses native 512 dims (hard-coded in source)
+    esm2:
+      model_name: "facebook/esm2_t33_650M_UR50D"  # Options: t6_8M, t12_35M, t30_150M, t33_650M, t36_3B
+      # Uses native 1280 dims for t33_650M (hard-coded in source)
+    esmc:
+      model_name: "esmc_6b"  # Default ESM-C model
+      # Uses native 2560 dims for 6B (hard-coded in source, zero information loss)
+      # precomputed_embeddings_path: Auto-detected from source_csv_path + checksum
+      # source_csv_path: Provided by training script (defaults to data.gdpa1_path)
+    esmc_300m:
+      model_name: "esmc_300m"
+      # Uses native 960 dims (hard-coded in source)
+    esmc_600m:
+      model_name: "esmc_600m"
+      # Uses native 1152 dims (hard-coded in source)
+    esmc_6b:
+      model_name: "esmc_6b"
+      # Uses native 2560 dims (hard-coded in source)
+    prott5:
+      model_name: "Rostlab/prot_t5_xl_uniref50"
+      # Uses native 1024 dims (hard-coded in source)
+
+# =============================================================================
+# DECODER SETTINGS
+# =============================================================================
+decoder:
+  type: "attention"  # Options: mlp, attention
+
+  # MLP Decoder (simple baseline configuration)
+  mlp:
+    hidden_dims: [256, 128]
+    activation: "relu"  # relu, gelu, silu
+    dropout: 0.2
+    batch_norm: true
+    pooling_strategy: "mean"  # Options: mean, sliced_wasserstein
+    output_activation: "none"  # Options: none, softplus, sigmoid, exp
+    # Output activation explained:
+    # - none: Linear output (default, good for normalized targets)
+    # - softplus: Smooth strictly positive (good for Titer if not normalized)
+    # - sigmoid: Bounded [0, 1] (good for probabilities)
+    # - exp: Exponential e^x (strictly positive, handles large ranges)
+
+  # Attention Decoder (works on pooled embeddings with cross-attention)
+  # Uses pre-normalization (LayerNorm before attention/FFN)
+  attention:
+    n_heads: 4
+    hidden_dim: 768  # Balance between information preservation and gradient stability
+    n_layers: 2
+    n_output_layers: 1  # Output MLP: 768 → 384 → 192 → 1 (÷2 each step)
+    dropout: 0.3
+
+    # Pooling strategy for sequence dimension
+    # Options: null/mean (average), attention (learnable position importance)
+    pooling_strategy: "mean"  # null or 'mean' for averaging, 'attention' to learn position importance
+
+    # Cross-attention and fusion
+    attention_strategy: "self_cross"  # Options: bidirectional_cross, self_cross, self_only
+    use_learnable_chain_fusion: "none"  # Options: "none" (50/50 average), "per_chain" (1 weight for VH/VL balance), "per_dim" (separate weight per feature dimension)
+    use_output_norm: false  # Options: true (LayerNorm between output head layers), false (no norm)
+
+    # Output activation (applied AFTER denormalization by target_transform)
+    # Default for all properties (override in property_specific if needed)
+    output_activation: "none"  # Options: none, softplus, sigmoid, exp
+    # IMPORTANT: output_activation vs target_transform:
+    # - target_transform: Normalizes TARGETS during training (y_true), applied in DataModule
+    #                     Models train on normalized scale (mean≈0, std≈1)
+    #                     Predictions are DENORMALIZED back to original scale
+    # - output_activation: Applied to MODEL OUTPUT (y_pred) AFTER denormalization
+    #                      Only use if you need constraints BEYOND normalization
+    # RECOMMENDATION: Use target_transform (z_score/log_zscore) + output_activation="none"
+    #                 Only use non-none activation if absolutely needed (rare!)
+    # 
+    # When to use each output_activation:
+    # - none: Default - use with target normalization (99% of cases)
+    # - softplus: Force strictly positive outputs (redundant if using log_zscore transform)
+    # - sigmoid: Force bounded [0,1] outputs (only for probability-like targets)
+    # - exp: Force strictly positive with exponential growth (avoid - causes instability)
+    
+    # Attention strategies explained:
+    # - bidirectional_cross: VH ↔ VL cross-attention (best for interface-dependent properties)
+    # - self_cross: Self-attention within each chain, then cross-attention (captures both local & interface)
+    # - self_only: Self-attention on separate chains, then concatenate (for chain-independent properties)
+    # 
+    # New features:
+    # - pooling_strategy='attention': Learn which sequence positions are important (vs mean pooling)
+    # - use_learnable_chain_fusion: "per_chain" or "per_dim" to learn property-specific VH/VL weights (vs "none" for 50/50)
+
+# =============================================================================
+# ANTIBODY FEATURES
+# =============================================================================
+# Sequence-based developability features extracted from VH/VL sequences.
+# Can be concatenated to embeddings for enhanced prediction.
+# Requires: abnumber (pip), biophi (bioconda), scalop (bioconda)
+# ORACLE OPTIMIZATION: Enabled but BioPhi disabled (BioPhi requires external API/database)
+antibody_features:
+  enabled: true  # Enabled for oracle (abnumber/scalop/sequence features are fast)
+  use_abnumber: true  # abnumber-based features (germline, CDR lengths, mutations)
+  use_biophi: false  # BioPhi humanness scores (DISABLED - requires API/database)
+  use_scalop: true  # ScaLoP canonical structure classes
+  use_sequence_features: true  # Pure Python sequence features (liabilities, charge, pI)
+  cdr_definition: "north"  # CDR definition: north (default), chothia, kabat, imgt
+  cache_abnumber: true  # Cache abnumber results for performance
+  normalize_antibody_features: true  # Z-score normalization (default from phase 4.3)
+  projection_dim: null  # No projection by default (property-specific overrides below)
+
+# =============================================================================
+# TRAINING SETTINGS
+# =============================================================================
+training:
+  # Two-stage training: pre-train on FLAb, fine-tune on GDPa1
+  do_pretrain: false  # Skip pretraining by default (use for baseline experiments)
+  do_finetune: true
+
+  # Pre-training (on FLAb binding data)
+  pretrain:
+    max_epochs: 50
+    batch_size: 32
+    learning_rate: 0.0001
+    weight_decay: 0.01
+    scheduler: "cosine"  # cosine, plateau, step
+    warmup_epochs: 2
+    early_stopping_patience: 10
+
+  # Fine-tuning (on GDPa1 developability)
+  finetune:
+    max_epochs: 75
+    batch_size: 16
+    learning_rate: 0.00001
+    weight_decay: 0.01
+    scheduler: "cosine"
+    warmup_epochs: 2
+    early_stopping_patience: 15
+
+  # Optimizer
+  optimizer: "adamw"  # adam, adamw, sgd
+
+  # Weight initialization
+  use_xavier_init: false  # Use Xavier uniform initialization for decoder weights
+  xavier_gain: 0.1  # Gain for Xavier init (small value for pre-norm, typical: 0.1-1.0)
+
+  # Loss function
+  loss: "mae"  # Options: mae, huber (mse and smooth_l1 also available)
+  # Loss function notes:
+  # - mae: Mean Absolute Error (L1) - robust to outliers, good for skewed distributions
+  # - huber: Hybrid of L2 (small errors) and L1 (large errors) - balanced, handles outliers
+  # Primary metric for evaluation: Spearman correlation across CV folds
+
+  # Gradient clipping
+  gradient_clip_val: 1.0
+
+  # Stochastic Weight Averaging (SWA) - averages weights for better generalization
+  use_swa: false
+  swa_lr_factor: 0.2  # SWA LR as fraction of base LR (1/5th for stability)
+  swa_epoch_start: 0.6  # Start SWA at 60% of training (e.g., epoch 30 of 50)
+  swa_annealing_epochs: 10  # Number of epochs for annealing
+  swa_annealing_strategy: "cos"  # Annealing strategy: "cos" or "linear"
+
+# =============================================================================
+# PROPERTY-SPECIFIC SETTINGS
+# =============================================================================
+# Configure per-property models (AC-SINS_pH7.4, PR_CHO, HIC, Tm2, Titer).
+# Override ANY parameter from encoder, decoder, training, or evaluation sections.
+#
+# TARGET NORMALIZATION (NEW):
+#   • target_transform: Type of normalization ("auto", "z_score", "log_zscore", "min_max", "identity")
+#     - "auto": Automatically select based on property (RECOMMENDED)
+#     - "z_score": Zero mean, unit variance
+#     - "log_zscore": Log then z-score (for heavy-tailed distributions)
+#     - "min_max": Scale to [0, 1]
+#     - "identity": No transformation
+#   • target_transform_kwargs: Optional parameters for transformation
+#
+# OUTPUT ACTIVATIONS:
+#   • With normalization: Use "none" (linear output)
+#   • Without normalization: Use "softplus", "sigmoid", or "exp"
+#   • RECOMMENDATION: Always use normalization + "none" activation
+#
+# ATTENTION STRATEGIES (based on biological mechanism):
+# • bidirectional_cross: VH ↔ VL interface interactions (HIC, PR_*, Titer)
+# • self_cross: Chain stability + interface (AC-SINS, Tm*)
+# • self_only: Chain-independent properties
+#
+# LOSS FUNCTIONS:
+# • huber: Balanced, handles outliers (good default)
+# • mae: Robust to outliers, skewed distributions (PR_CHO)
+# • mse: Standard regression (sensitive to outliers)
+#
+property_specific:
+  # Hydrophobicity: Hydrophobic patches at VH-VL interface
+  # Range: 2.43-4.50, Skewness: 2.027 → log improves to 1.438
+  # Mechanism: Interface-dependent
+  # ORACLE OPTIMIZATION: Using esmc_600m instead of esmc_6b (no API, faster)
+  HIC:
+    encoder_type: "esmc_600m"
+    data:
+      use_full_chain: true
+    training:
+      loss: "huber"
+      target_transform: "log_zscore"
+      gradient_clip_val: 5.0
+      use_swa: false
+      use_xavier_init: true
+      xavier_gain: 0.5
+      finetune:
+        batch_size: 16
+        learning_rate: 5e-05
+        max_epochs: 50
+        weight_decay: 0.001
+    antibody_features:
+      enabled: true
+      normalize_antibody_features: true
+      projection_dim: null
+    decoder:
+      attention:
+        n_heads: 8
+        hidden_dim: 1024
+        n_layers: 1
+        n_output_layers: 1
+        dropout: 0.2
+        pooling_strategy: "attention"
+        attention_strategy: "self_only"
+        use_learnable_chain_fusion: "per_dim"
+
+  # Polyreactivity: Non-specific binding at paratope (VH+VL CDR surface)
+  # Range: 0.00-0.547, Skewness: 0.427 (fairly symmetric)
+  # Mechanism: Interface-dependent
+  PR_CHO:
+    encoder_type: "esmc_300m"
+    data:
+      use_full_chain: true
+    training:
+      loss: "huber"
+      target_transform: "z_score"
+      gradient_clip_val: 0.5
+      use_swa: true
+      use_xavier_init: true
+      xavier_gain: 0.5
+      finetune:
+        batch_size: 32
+        learning_rate: 1e-05
+        max_epochs: 100
+        weight_decay: 0.1
+    antibody_features:
+      enabled: true
+      normalize_antibody_features: true
+      projection_dim: null
+    decoder:
+      attention:
+        n_heads: 16
+        hidden_dim: 1024
+        n_layers: 2
+        n_output_layers: 2
+        dropout: 0.2
+        pooling_strategy: "mean"
+        attention_strategy: "self_only"
+        use_learnable_chain_fusion: "per_dim"
+
+  # Self-Association: Ab-Ab interactions, VH-VL interface quality critical
+  # Range: -1.88-29.50, Skewness: 1.120 (right-skewed, can be negative)
+  # Mechanism: Chain stability + interface
+  # ORACLE OPTIMIZATION: Using esmc_600m instead of esmc_6b (no API, faster, local only)
+  "AC-SINS_pH7.4":
+    encoder_type: "esmc_600m"
+    data:
+      use_full_chain: false
+    training:
+      loss: "huber"
+      target_transform: "z_score"
+      gradient_clip_val: 10.0
+      use_swa: true
+      use_xavier_init: true
+      xavier_gain: 0.1
+      finetune:
+        batch_size: 32
+        learning_rate: 1e-05
+        max_epochs: 75
+        weight_decay: 0.0001
+    antibody_features:
+      enabled: true
+      normalize_antibody_features: true
+      projection_dim: null
+    decoder:
+      attention:
+        n_heads: 8
+        hidden_dim: 1024
+        n_layers: 1
+        n_output_layers: 2
+        dropout: 0.3
+        pooling_strategy: "attention"
+        attention_strategy: "self_cross"
+        use_learnable_chain_fusion: "per_chain"
+
+  # Thermostability: Hierarchical - domains stable individually, then interface
+  # Range: 75.01-88.57, Skewness: -0.626 (slight left skew, narrow range)
+  # Mechanism: Domain stability + interface
+  # ORACLE OPTIMIZATION: Using esmc_600m instead of esmc_6b (no API, faster, local only)
+  Tm2:
+    encoder_type: "esmc_600m"
+    data:
+      use_full_chain: true
+    training:
+      loss: "mae"
+      target_transform: "z_score"
+      gradient_clip_val: 10.0
+      use_swa: true
+      use_xavier_init: false
+      xavier_gain: 0.1
+      finetune:
+        batch_size: 16
+        learning_rate: 1e-05
+        max_epochs: 50
+        weight_decay: 0.05
+    antibody_features:
+      enabled: false
+      normalize_antibody_features: true
+      projection_dim: null
+    decoder:
+      attention:
+        n_heads: 4
+        hidden_dim: 768
+        n_layers: 6
+        n_output_layers: 1
+        dropout: 0.4
+        pooling_strategy: "attention"
+        attention_strategy: "bidirectional_cross"
+        use_learnable_chain_fusion: "per_chain"
+
+  # Titer/Expression: Chain foldability + pairing efficiency
+  # Range: 34.26-781.93, Skewness: 1.208 → log improves to -0.613
+  # Mechanism: Folding + pairing
+  # ORACLE OPTIMIZATION: Using esmc_600m instead of esmc_6b (no API, faster)
+  Titer:
+    encoder_type: "esmc_600m"
+    data:
+      use_full_chain: true
+    training:
+      loss: "huber"
+      target_transform: "log_zscore"
+      gradient_clip_val: 5.0
+      use_swa: false
+      use_xavier_init: false
+      xavier_gain: 0.1
+      finetune:
+        batch_size: 64
+        learning_rate: 1e-06
+        max_epochs: 100
+        weight_decay: 0.0005
+    antibody_features:
+      enabled: true
+      normalize_antibody_features: true
+      projection_dim: null
+    decoder:
+      attention:
+        n_heads: 8
+        hidden_dim: 1536
+        n_layers: 2
+        n_output_layers: 4
+        dropout: 0.4
+        pooling_strategy: "attention"
+        attention_strategy: "bidirectional_cross"
+        use_learnable_chain_fusion: "per_dim"
+
+# =============================================================================
+# EVALUATION SETTINGS
+# =============================================================================
+evaluation:
+  metrics:
+    - "pearson"
+    - "spearman"
+    - "rmse"
+    - "mae"
+
+  # Track per-property and overall metrics
+  track_per_fold: true
+
+# =============================================================================
+# LOGGING & CHECKPOINTING
+# =============================================================================
+logging:
+  use_wandb: true
+  wandb_project: "CrossAbSense"
+  wandb_entity: null
+  wandb_log_every_n_steps: 2  # Log to WandB every 2 training steps
+
+  # TensorBoard
+  use_tensorboard: false  # Disabled - using WandB only
+  log_dir: "logs"
+
+  # Checkpointing
+  checkpoint_dir: "models/checkpoints"
+  save_top_k: 3
+  monitor_metric: "val_spearman"
+  monitor_mode: "max"
+
+  # Save predictions
+  save_predictions: true
+  predictions_dir: "outputs/predictions"
+
+# =============================================================================
+# BASELINE MODELS
+# =============================================================================
+baselines:
+  random:
+    fit_to_train_distribution: true
+
+  xgboost:
+    n_estimators: 1000
+    max_depth: 6
+    learning_rate: 0.01
+    subsample: 0.8
+    colsample_bytree: 0.8
+    early_stopping_rounds: 50
+    use_esm2_embeddings: true
+    esm2_model: "facebook/esm2_t33_650M_UR50D"

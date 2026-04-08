@@ -1,0 +1,80 @@
+# Hyperparameter sweep for HIC (Hydrophobicity)
+# Bayesian optimization over encoder, architecture, and training params.
+#
+# Usage:
+#   wandb sweep config/tuning/example_HIC.yaml
+#   wandb agent <sweep-id> --count 60
+
+program: src/tuning/tune_hyperparam.py
+project: CrossAbSense
+name: "sweep_HIC"
+method: bayes
+
+metric:
+  name: cv_val_spearman
+  goal: maximize
+
+parameters:
+  property:
+    value: 'HIC'
+
+  # --- Encoder ---
+  encoder_type:
+    values: ['esmc_300m', 'esmc_6b']
+  sequence_representation:
+    values: ['normal', 'full_chain']
+
+  # --- Architecture ---
+  hidden_dim:
+    values: [512, 768, 1024, 1536]
+  n_layers:
+    values: [1, 2, 3]
+  n_heads:
+    values: [2, 4, 8, 16]
+  n_output_layers:
+    values: [1, 2, 3]
+  attention_strategy:
+    values: ['bidirectional_cross', 'self_cross', 'self_only']
+  pooling_strategy:
+    values: ['mean', 'attention']
+  use_learnable_chain_fusion:
+    values: ['none', 'per_chain', 'per_dim']
+
+  # --- Regularization ---
+  dropout:
+    values: [0.1, 0.2, 0.3, 0.4, 0.5]
+  weight_decay:
+    values: [0.01, 0.001, 0.0001, 0.00001]
+
+  # --- Training ---
+  learning_rate:
+    values: [0.00001, 0.00005, 0.0001]
+  batch_size:
+    values: [4, 8, 16, 32, 64]
+  max_epochs:
+    values: [50, 75, 100]
+  gradient_clip_val:
+    values: [1.0, 5.0]
+  loss:
+    values: ['mae', 'huber']
+
+  # --- SWA ---
+  swa_epoch_start:
+    values: [0.6, 0.8]
+  swa_lr_factor:
+    values: [0.2, 0.5]
+
+  # --- Initialization ---
+  use_xavier_init:
+    values: [true, false]
+
+  # --- Antibody features ---
+  normalize_antibody_features:
+    values: [true, false]
+
+early_terminate:
+  type: hyperband
+  min_iter: 20
+  s: 2
+
+run_cap: 60
