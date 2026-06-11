@@ -359,17 +359,20 @@ def train_single_fold(
         # Handle cases where base_lr might be a sequence (e.g. from some sweep configs)
         if isinstance(base_lr, (list, tuple)) and len(base_lr) == 1:
             base_lr = base_lr[0]
-        
+
         swa_lr_factor = config["training"].get("swa_lr_factor", 0.1)
         swa_lrs = float(base_lr) * swa_lr_factor
-        
+
+        # Annealing length: derive as 10% of max_epochs (matches the original
+        # tuning code that produced the paper), unless explicitly overridden.
+        max_epochs = config["training"]["finetune"]["max_epochs"]
         swa_callback = StochasticWeightAveraging(
             swa_lrs=swa_lrs,
             swa_epoch_start=config["training"].get(
                 "swa_epoch_start", 0.75
             ),
             annealing_epochs=config["training"].get(
-                "swa_annealing_epochs", 10
+                "swa_annealing_epochs", int(max_epochs * 0.1)
             ),
             annealing_strategy=config["training"].get(
                 "swa_annealing_strategy", "cos"
@@ -693,17 +696,20 @@ def train_final_model(
         # Handle cases where base_lr might be a sequence (e.g. from some sweep configs)
         if isinstance(base_lr, (list, tuple)):
             base_lr = base_lr[0]
-            
+
         swa_lr_factor = config["training"].get("swa_lr_factor", 0.1)
         swa_lrs = float(base_lr) * swa_lr_factor
-        
+
+        # Annealing length: derive as 10% of max_epochs (matches the original
+        # tuning code that produced the paper), unless explicitly overridden.
+        max_epochs = config["training"]["finetune"]["max_epochs"]
         swa_callback = StochasticWeightAveraging(
             swa_lrs=swa_lrs,
             swa_epoch_start=config["training"].get(
                 "swa_epoch_start", 0.75
             ),
             annealing_epochs=config["training"].get(
-                "swa_annealing_epochs", 10
+                "swa_annealing_epochs", int(max_epochs * 0.1)
             ),
             annealing_strategy=config["training"].get(
                 "swa_annealing_strategy", "cos"

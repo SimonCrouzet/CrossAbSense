@@ -260,7 +260,8 @@ training:
   use_swa: false
   swa_lr_factor: 0.2  # SWA LR as fraction of base LR (1/5th for stability)
   swa_epoch_start: 0.6  # Start SWA at 60% of training (e.g., epoch 30 of 50)
-  swa_annealing_epochs: 10  # Number of epochs for annealing
+  # swa_annealing_epochs: omitted on purpose — train.py derives it as int(0.1 * max_epochs),
+  # matching the original tuning code that produced the paper. Set it here only to override.
   swa_annealing_strategy: "cos"  # Annealing strategy: "cos" or "linear"
 
 # =============================================================================
@@ -315,7 +316,7 @@ property_specific:
         weight_decay: 0.001
     antibody_features:
       enabled: true
-      normalize_antibody_features: true
+      normalize_antibody_features: false  # paper sweep winner (run h44djka7) trained with un-normalized features
       projection_dim: null
     decoder:
       attention:
