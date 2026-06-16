@@ -69,6 +69,20 @@ cd CrossAbSense
 pip install -r requirements.txt
 ```
 
+## Pretrained models
+
+Trained oracles for all five properties are published on the Hugging Face Hub:
+[**SimonCrouzet/CrossAbSense**](https://huggingface.co/SimonCrouzet/CrossAbSense) (Apache-2.0).
+
+```bash
+pip install huggingface_hub
+python scripts/download_models.py            # final checkpoints -> models/  (add --folds for CV)
+python -m src.predict --input inputs/public_mabs_not_in_gdpa1.csv \
+  --model models/HIC_3595cc57 --output predictions.csv
+```
+
+`predict.py --from-hf` also downloads a missing model on demand (and verifies a local copy against the Hub). See the [model card](https://huggingface.co/SimonCrouzet/CrossAbSense) for per-property scores, available releases, and caveats.
+
 ## Usage
 
 ### 1. Train a single model

@@ -365,8 +365,14 @@ class AntibodyFeatures:
         })
 
     def _run_biophi_subprocess(self, sequence: str) -> Optional[float]:
-        """Run BioPhi humanness using Python API in biophi conda env."""
+        """Run BioPhi humanness using Python API in the current env.
+
+        Runs as a subprocess (not in-process) only to keep the 30s timeout and
+        to isolate any BioPhi/abnumber crash from training — but uses the SAME
+        interpreter (sys.executable), so BioPhi just needs to be installed in
+        this environment (no separate `biophi` conda env required)."""
         import subprocess
+        import sys
         from pathlib import Path
 
         try:
@@ -389,11 +395,8 @@ score = chain_humanness.get_oasis_identity(min_fraction_subjects=0.01)
 print(score)
 """
 
-            # Run in biophi conda env
-            cmd = [
-                "conda", "run", "-n", "biophi",
-                "python", "-c", python_code
-            ]
+            # Run in the current environment (same interpreter)
+            cmd = [sys.executable, "-c", python_code]
 
             result = subprocess.run(
                 cmd,

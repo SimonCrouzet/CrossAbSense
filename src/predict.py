@@ -769,8 +769,103 @@ def predict_final_model(
     torch.cuda.empty_cache()
     
     logger.info(f"✓ Final model prediction complete")
-    
+
     return results
+
+
+def _sha256(path: Path, chunk: int = 1 << 20) -> str:
+    """Stream a file's SHA-256 (matches the Git-LFS oid the Hub stores)."""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(chunk), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _verify_against_hub(model_dir: Path, repo_id: str, revision: str) -> bool:
+    """Warn if local files differ from the Hub revision (LFS sha256 compare).
+
+    Returns True if everything matches; logs a warning and returns False on any
+    changed/missing file. Non-fatal: local weights are still used.
+    """
+    try:
+        from huggingface_hub import HfApi
+        info = HfApi().repo_info(repo_id, revision=revision, files_metadata=True)
+    except Exception as e:  # offline, missing repo/revision, etc.
+        logger.warning(f"Could not verify '{model_dir.name}' against {repo_id}@{revision}: {e}")
+        return False
+
+    name = model_dir.name
+    siblings = {s.rfilename: s for s in info.siblings if s.rfilename.startswith(f"{name}/")}
+    if not siblings:
+        logger.warning(f"No files for '{name}' at {repo_id}@{revision}; cannot verify.")
+        return False
+
+    # Only compare files that exist locally — folds intentionally not downloaded
+    # should not be reported as "missing".
+    changed = []
+    for rfile, s in siblings.items():
+        rel = rfile[len(name) + 1:]
+        local = model_dir / rel
+        if not local.exists():
+            continue
+        # Weight files are LFS-tracked (sha256 available); plain files use size only.
+        if getattr(s, "lfs", None) is not None:
+            if _sha256(local) != s.lfs.sha256:
+                changed.append(rel)
+        elif s.size is not None and local.stat().st_size != s.size:
+            changed.append(rel)
+
+    if changed:
+        logger.warning(
+            f"⚠ Local '{name}' differs from {repo_id}@{revision} — "
+            f"changed={changed}. Using LOCAL copy."
+        )
+        return False
+    logger.info(f"✓ Local '{name}' matches {repo_id}@{revision}")
+    return True
+
+
+def _resolve_hf_model(model_dir: Path, repo_id: str, revision: str, needed_ckpts=None) -> Path:
+    """Download a model directory from the Hugging Face Hub if missing locally.
+
+    The basename of ``model_dir`` (e.g. ``HIC_3595cc57``) is treated as the
+    subfolder to fetch from ``repo_id``. A bare name (no directory component) is
+    normalized to live under ``models/`` so downloads always land there.
+    Local copies always take precedence — the Hub is only consulted if missing.
+    Returns the local path to the (now-present) model directory.
+    """
+    name = model_dir.name
+    # Normalize a bare name (e.g. "HIC_3595cc57") to "models/HIC_3595cc57"
+    if str(model_dir.parent) in ("", "."):
+        model_dir = Path("models") / name
+
+    # Only the checkpoint(s) actually needed are fetched (folds are large and
+    # only used by --use-cv/--fold); small metadata files are always included.
+    needed_ckpts = needed_ckpts or ["final.ckpt"]
+    have_all = model_dir.exists() and all((model_dir / c).exists() for c in needed_ckpts)
+    if have_all:
+        _verify_against_hub(model_dir, repo_id, revision)
+        return model_dir
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        raise SystemExit("--from-hf requires huggingface_hub. Install with: pip install huggingface_hub")
+
+    parent = model_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    allow_patterns = [f"{name}/{c}" for c in needed_ckpts] + [
+        f"{name}/*.yaml", f"{name}/*.txt", f"{name}/*.json",
+    ]
+    logger.info(f"Downloading {needed_ckpts} for '{name}' from {repo_id}@{revision} ...")
+    snapshot_download(
+        repo_id=repo_id,
+        revision=revision,
+        local_dir=str(parent),
+        allow_patterns=allow_patterns,
+    )
+    return parent / name
 
 
 def main():
@@ -799,6 +894,24 @@ def main():
         type=str,
         required=True,
         help="Path to output CSV file with predictions",
+    )
+    parser.add_argument(
+        "--from-hf",
+        nargs="?",
+        const="SimonCrouzet/CrossAbSense",
+        default=None,
+        metavar="REPO_ID",
+        help=(
+            "Download missing model directories from the Hugging Face Hub. "
+            "Use bare (--from-hf) for the default repo, or pass a repo id. "
+            "The basename of --model/--models is fetched as the repo subfolder."
+        ),
+    )
+    parser.add_argument(
+        "--hf-revision",
+        type=str,
+        default="v0.9",
+        help="HF tag/branch/commit to download from (default: v0.9)",
     )
     parser.add_argument(
         "--default-subtype",
@@ -874,11 +987,26 @@ def main():
         model_dirs = [Path(args.model)]
     else:
         model_dirs = [Path(m) for m in args.models]
-    
+
+    # Optionally fetch missing model dirs from the Hugging Face Hub.
+    # Only download the checkpoint(s) this run actually needs (folds are large).
+    if args.from_hf:
+        if args.use_cv:
+            needed_ckpts = [f"fold{i}.ckpt" for i in range(5)]
+        elif args.fold is not None:
+            needed_ckpts = [f"fold{args.fold}.ckpt"]
+        else:
+            needed_ckpts = ["final.ckpt"]
+        model_dirs = [
+            _resolve_hf_model(d, args.from_hf, args.hf_revision, needed_ckpts)
+            for d in model_dirs
+        ]
+
     # Validate model directories
     for model_dir in model_dirs:
         if not model_dir.exists():
-            raise FileNotFoundError(f"Model directory not found: {model_dir}")
+            hint = "" if args.from_hf else " (tip: pass --from-hf to download it)"
+            raise FileNotFoundError(f"Model directory not found: {model_dir}{hint}")
     
     logger.info("="*60)
     logger.info("Antibody Developability Prediction")
